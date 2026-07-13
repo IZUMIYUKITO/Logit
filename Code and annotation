@@ -89,3 +89,16 @@ for j in range(len(df6)):
 ac=df6['accurency'].sum()/len(df6)
 print(ac)
 #最终得出准确率ac，为0.5595238095238095，勉强高于0.5，不过限于数据库数量和关键词库严谨度，该结果差强人意
+
+#方案2，机器学习使用的一般方法，优点是数据处理量大，代码简化程度高，实际上是处理本问题的当前最优解，缺点是限于目前的数据规模，使用这个方法达到的效果反而并不令人满意，由于变量数量和样本数量差距小，自由度太低，导致实际需要超过35，甚至是接近200次迭代才能完成模型训练
+from sklearn.model_selection import train_test_split
+from sklearn.linear_model import LogisticRegression
+from sklearn.metrics import accuracy_score
+X,y=np.array(df6['Headlines'].to_list()),df6['涨跌'].to_list()
+X_train, X_test, y_train, y_test = train_test_split(X, y, test_size=0.2, random_state=42)
+logreg = LogisticRegression(max_iter=200)
+logreg.fit(X_train, y_train)
+y_pred = logreg.predict(X_test)
+accuracy = accuracy_score(y_test, y_pred)
+print("Accuracy:", accuracy)
+#最终结果为Accuracy: 0.5338983050847458（仅在random_sate=42这一常用随机状态下，实际上随机状态不同预测准确度也有差别，在多次更换random_state后，比较常见的准确度还有0.5，0.49等，绝对数值仅供参考，但是大致区间在0.5附近），实际上可能甚至不如人为剔除不显著变量的方案1，同时也说明关键词库的选择更科学、数据量更为庞大时，效应或许才会更显著
