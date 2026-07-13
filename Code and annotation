@@ -1,0 +1,91 @@
+#初步引入库
+import pandas as pd
+import time
+import numpy as np
+#导入数据库文件
+df1=pd.read_csv("./reuters_headlines.csv")
+df2=pd.read_csv("./英国富时100指数历史数据.csv")
+df1=df1.dropna()   #删除空值，实际上这个数据库没有空值，只是为了严谨写了这行
+#定义时间转化函数，目的是将两个dataframe的Time column形式转为一致
+def time_trans(x):
+    t=time.strptime(x,'%b %d %Y')
+    y=time.strftime("%Y-%m-%d",t)
+    return y
+df1['Time']=df1['Time'].apply(time_trans)   #转化df1Time列
+#创建新列‘涨跌’（由df2‘涨跌幅’一列获得，rule是将正值转为1，非正值转为0）后面将作为虚拟因变量进行logit模型回归
+df2['涨跌']=np.nan
+for i in range(len(df2)):
+    df2.loc[i,'涨跌幅']=df2.loc[i,'涨跌幅'][:-1]
+for i in range(len(df2)-1):
+    if float(df2.loc[i+1,'涨跌幅'])>0:   #此处加1是贴合实际需要，实际上新闻会影响后一天的股市而非当天
+        df2.loc[i,'涨跌']=1
+    else:
+        df2.loc[i,'涨跌']=0
+df3=df2[['日期','涨跌']]   #只取需要的两列并在下面改变列名方便进行merge合并处理
+df3=df3.rename(columns={'日期':'Time'})
+#将新闻标题按日期分组，并将当日所有新闻标题整合到一个列表中，完成数据在时间序列上的集成，并进一步为两dataframe的合并创造条件
+df4=df1.groupby(['Time'])
+df4=df4['Headlines'].apply(list).reset_index()
+df5=pd.merge(df4,df3,on='Time',how='left')
+df6=df5.dropna().reset_index(drop=True)
+df6   
+#第一阶段完成，主要是完成了数据的处理和整合，方面之后向量化处理和建立logit回归模型
+
+#方案1，优点是好描述，也更直观，缺点也很明显，实际R方不高（但是LLR检验可信度还是比较高的），而且由于关键词集是将每日词频最高词取前2后取总并集作为关键词集合，并据此对每日标题进行向量化处理，显然不够科学严谨（主要限于算力和为了保证结果展示的方便）
+#引入CountVectorizer函数
+from sklearn.feature_extraction.text import CountVectorizer
+cv=CountVectorizer(lowercase=True,ngram_range=(1,1),stop_words='english',max_features=2)   #将所有字母变为小写，并设定切割单词（非词组），设定系统‘english’停用词筛出无用的代词、助词、介词等，并统一取词频为前二的单词
+l=[]
+#循环取出每日新闻标题集合中词频前二的单词，并最终合并在一个关键词总集合中，即d
+for i in range(len(df6)):
+    cv_fit=cv.fit_transform(df6.loc[i,'Headlines'])
+    l=list(set(l)|set(cv.get_feature_names()))
+d={}
+for index,val in enumerate(l):
+    d[val]=index
+d
+#第二阶段，得出关键词集d
+
+#利用CountVectorizer以上面的关键词库对新闻标题进行向量化操作
+cv1=CountVectorizer(lowercase=True,ngram_range=(1,1),vocabulary=d)
+for i in range(len(df6)):
+    cv1_fit=cv1.fit_transform(df6.loc[i,'Headlines'])
+    df6.at[i,'Headlines']=cv1_fit.toarray().sum(axis=0)
+df6
+#完成向量化
+
+#对处理后的向量进行分解处理，得出每个关键词的分量，同时添加新列常数列‘Intercept’
+for i in range(len(d)):
+    df6[str(i)+'号词']=np.nan
+    for j in range(len(df6)):
+        df6.loc[j,str(i)+'号词']=df6.loc[j,'Headlines'][i]
+df6['Intercept']=1
+df6
+#得到最终回归用dataframe
+
+#进行logit回归
+import statsmodels.api as sm
+train_col=df6.columns[3:]
+logit = sm.Logit(df6['涨跌'],df6[train_col])
+results = logit.fit()
+print(results.summary())
+#得出回归结果
+
+#根据回归结果，挑选出了8个p检验可信度较高的关键词，并以这8个词的词频作为自变量构建拟合函数，利用拟合曲线得出因变量的logit模型预测值，并以0.5为分界规定预测值大于等于0.5预测为1，反之为0，并与实际值比较，求得该模型预测准确率
+import math
+df6['ref']=df6.apply(lambda x: 1/(1+math.exp(-(0.8855*x['Intercept']+0.1663*x['92号词']-0.4329*x['121号词']+0.4312*x['127号词']+0.477*x['12号词']-0.6941*x['95号词']-1.0839*x['26号词']+0.4595*x['78号词']+0.3462*x['144号词']))),axis=1)   #构建拟合函数
+df6['predict']=np.nan
+df6['accurency']=np.nan
+for i in range(len(df6)):
+    if df6.loc[i,'ref']>=0.5:
+        df6.loc[i,'predict']=1
+    else:
+        df6.loc[i,'predict']=0
+for j in range(len(df6)):
+    if df6.loc[j,'predict']==df6.loc[j,'涨跌']:
+        df6.loc[j,'accurency']=1
+    else:
+        df6.loc[j,'accurency']=0
+ac=df6['accurency'].sum()/len(df6)
+print(ac)
+#最终得出准确率ac，为0.5595238095238095，勉强高于0.5，不过限于数据库数量和关键词库严谨度，该结果差强人意
